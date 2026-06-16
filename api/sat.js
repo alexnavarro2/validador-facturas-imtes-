@@ -1,48 +1,48 @@
-// api/sat.js — Proxy SAT para Vercel (Node.js serverless function)
-// Coloca este archivo en la carpeta /api de tu repositorio GitHub
+// api/sat.js — Proxy SAT para Vercel
+// Ruta: /api/sat.js en tu repositorio GitHub
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
 export default async function handler(req, res) {
-  // Permitir CORS desde cualquier origen
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, SOAPAction');
 
-  // Preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).end();
 
   try {
-    // Leer el body SOAP que viene del navegador
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    const body = Buffer.concat(chunks).toString('utf-8');
+    // Leer body manualmente (bodyParser desactivado)
+    const body = await new Promise((resolve, reject) => {
+      const chunks = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+      req.on('error', reject);
+    });
 
-    // Llamar al SAT desde el servidor de Vercel (sin restricciones CORS)
-    const satUrl = 'https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
-    const satResponse = await fetch(satUrl, {
+    const SAT_URL = 'https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
+
+    const satRes = await fetch(SAT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/xml; charset=utf-8',
         'SOAPAction': '"http://tempuri.org/IConsultaCFDIService/Consulta"',
-        'User-Agent': 'Mozilla/5.0',
+        'User-Agent': 'Mozilla/5.0 (compatible; IMTES/1.0)',
+        'Accept': 'text/xml, application/xml',
       },
       body: body,
-      signal: AbortSignal.timeout(25000),
     });
 
-    const responseText = await satResponse.text();
-
+    const text = await satRes.text();
     res.setHeader('Content-Type', 'text/xml; charset=utf-8');
-    return res.status(satResponse.status).send(responseText);
+    return res.status(200).send(text);
 
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('SAT proxy error:', err);
+    return res.status(500).json({ error: err.message });
   }
 }
