@@ -1220,7 +1220,7 @@ let filtradas={detalle:[],resumen:[]};
    El orden de intento es automático.
 ══════════════════════════════════════════════════════════════ */
 const SAT_SOAP_URL='https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
-const PROXY_URL='/api/sat';
+const CORS_PROXY='https://api.allorigins.win/raw?url=';
 
 // Estado SAT
 let satMode = 'checking'; // 'direct' | 'proxy' | 'none' | 'checking'
@@ -1252,14 +1252,36 @@ async function buildSOAP(rfc_e, rfc_r, total, uuid){
 }
 
 function parseSATResponse(xmlText){
-  const doc=new DOMParser().parseFromString(xmlText,'application/xml');
-  const result={Estado:'',EsCancelable:'',ValidacionEFOS:'',EstatusCancelacion:''};
-  for(const el of doc.getElementsByTagNameNS('*','*')){
-    const t=lTag(el.tagName);
-    if(t==='Estado') result.Estado=el.textContent.trim();
-    if(t==='EsCancelable') result.EsCancelable=el.textContent.trim();
-    if(t==='ValidacionEFOS') result.ValidacionEFOS=el.textContent.trim();
-    if(t==='EstatusCancelacion') result.EstatusCancelacion=el.textContent.trim();
+  const result={Estado:'',EsCancelable:'',ValidacionEFOS:'',EstatusCancelacion:'',CodigoEstatus:''};
+  // Método 1: DOMParser con búsqueda exhaustiva por localName
+  try{
+    const doc=new DOMParser().parseFromString(xmlText,'application/xml');
+    const all=doc.getElementsByTagNameNS('*','*');
+    for(const el of all){
+      const t=lTag(el.tagName);
+      if(t==='Estado'&&el.textContent.trim())          result.Estado=el.textContent.trim();
+      if(t==='EsCancelable'&&el.textContent.trim())    result.EsCancelable=el.textContent.trim();
+      if(t==='ValidacionEFOS'&&el.textContent.trim())  result.ValidacionEFOS=el.textContent.trim();
+      if(t==='EstatusCancelacion'&&el.textContent.trim()) result.EstatusCancelacion=el.textContent.trim();
+      if(t==='CodigoEstatus'&&el.textContent.trim())   result.CodigoEstatus=el.textContent.trim();
+    }
+  }catch(e){}
+  // Método 2: regex como fallback si el DOMParser falla
+  if(!result.Estado){
+    const m=xmlText.match(/<[^:>]*:?Estado[^>]*>([^<]+)<\//i);
+    if(m) result.Estado=m[1].trim();
+  }
+  if(!result.EsCancelable){
+    const m=xmlText.match(/<[^:>]*:?EsCancelable[^>]*>([^<]+)<\//i);
+    if(m) result.EsCancelable=m[1].trim();
+  }
+  if(!result.ValidacionEFOS){
+    const m=xmlText.match(/<[^:>]*:?ValidacionEFOS[^>]*>([^<]+)<\//i);
+    if(m) result.ValidacionEFOS=m[1].trim();
+  }
+  if(!result.EstatusCancelacion){
+    const m=xmlText.match(/<[^:>]*:?EstatusCancelacion[^>]*>([^<]+)<\//i);
+    if(m) result.EstatusCancelacion=m[1].trim();
   }
   return result;
 }
@@ -1277,35 +1299,51 @@ async function consultarSATdirecto(soap){
 
 /* Intento via proxy local */
 async function consultarSATproxy(soap){
-  const res=await fetch(PROXY_URL,{
+  // Codificar la URL del SAT para pasarla al proxy CORS
+  const SAT_URL='https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
+  // Usar corsproxy.io como proxy CORS gratuito
+  const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(SAT_URL);
+  const res=await fetch(proxyUrl,{
     method:'POST',
-    headers:{'Content-Type':'text/xml; charset=utf-8'},
-    body:soap, signal:AbortSignal.timeout(15000)
+    headers:{
+      'Content-Type':'text/xml; charset=utf-8',
+      'SOAPAction':'"http://tempuri.org/IConsultaCFDIService/Consulta"',
+    },
+    body:soap,
+    signal:AbortSignal.timeout(25000)
   });
   if(!res.ok) throw new Error(`HTTP ${res.status}`);
-  return parseSATResponse(await res.text());
+  const text=await res.text();
+  console.log('[SAT response]', text.substring(0,500));
+  return parseSATResponse(text);
 }
 
 /* Detección automática del mejor modo */
 async function verificarSAT(){
   setSatUI('checking');
-  // Intentar el proxy serverless de Vercel (/api/sat)
+  // Probar corsproxy.io como proxy CORS gratuito para el SAT
   try{
+    const SAT_URL='https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
     const testSOAP=await buildSOAP('AAA010101AAA','AAA010101AAA','1.0','00000000-0000-0000-0000-000000000000');
-    const r=await fetch('/api/sat',{
+    const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(SAT_URL);
+    const r=await fetch(proxyUrl,{
       method:'POST',
-      headers:{'Content-Type':'text/xml; charset=utf-8'},
+      headers:{
+        'Content-Type':'text/xml; charset=utf-8',
+        'SOAPAction':'"http://tempuri.org/IConsultaCFDIService/Consulta"',
+      },
       body:testSOAP,
-      signal:AbortSignal.timeout(8000)
+      signal:AbortSignal.timeout(10000)
     });
-    // Si responde (aunque el UUID sea inválido, el SAT responde XML)
-    if(r.status===200||r.status===500){
-      setSatUI('proxy','✓ Conectado al SAT via servidor Vercel — validación en tiempo real');
-      return;
+    if(r.ok){
+      const txt=await r.text();
+      if(txt.includes('ConsultaResult')||txt.includes('CodigoEstatus')||txt.includes('Envelope')){
+        setSatUI('proxy','✓ Conectado al SAT — validación en tiempo real');
+        return;
+      }
     }
-  }catch(e){}
-  // Sin conexión (desarrollo local sin proxy)
-  setSatUI('none','Sin conexión SAT — sube el proyecto a Vercel para validación en línea');
+  }catch(e){console.warn('corsproxy.io falló:',e.message);}
+  setSatUI('none','Sin conexión SAT — verifica tu conexión a internet');
 }
 
 /* Consultar una factura con el mejor modo disponible */
@@ -1319,6 +1357,7 @@ async function consultarSAT(f){
     f.EsCancelable_SAT=result.EsCancelable;
     f.ValidacionEFOS_SAT=result.ValidacionEFOS;
     f.EstatusCancelacion=result.EstatusCancelacion;
+    if(!result.Estado) f.Error_SAT='Sin respuesta del SAT';
   }catch(e){
     f.Error_SAT='Error SAT: '+(e.message||'timeout');
   }
