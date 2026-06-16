@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/sat.js": {
+      "maxDuration": 30
+    }
+  }
+}
