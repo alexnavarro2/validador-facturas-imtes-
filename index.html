@@ -1078,7 +1078,7 @@ m226 -441 c28 -79 52 -147 52 -150 0 -4 -49 -7 -110 -7 -60 0 -110 3 -110 8 0
   <!-- Proxy fallback (colapsable) -->
   <div class="proxy-details" id="proxy-details">
     <div class="proxy-steps">
-      El SAT bloquea llamadas directas desde navegadores (CORS). Para habilitar la validación:
+      Estás en desarrollo local. Para habilitar la validación SAT sube el proyecto a Vercel (el archivo <strong>api/sat.js</strong> actúa como proxy automáticamente). O bien corre el proxy local:
       <ol>
         <li>Instala Python 3 si no lo tienes (<a href="https://python.org" target="_blank" style="color:var(--wine)">python.org</a>)</li>
         <li>Ejecuta en terminal:</li>
@@ -1220,7 +1220,7 @@ let filtradas={detalle:[],resumen:[]};
    El orden de intento es automático.
 ══════════════════════════════════════════════════════════════ */
 const SAT_SOAP_URL='https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
-const PROXY_URL='http://localhost:5050/sat';
+const PROXY_URL='/api/sat';
 
 // Estado SAT
 let satMode = 'checking'; // 'direct' | 'proxy' | 'none' | 'checking'
@@ -1289,47 +1289,37 @@ async function consultarSATproxy(soap){
 /* Detección automática del mejor modo */
 async function verificarSAT(){
   setSatUI('checking');
-  // Intento 1: directo
-  const testSOAP=await buildSOAP('AAA010101AAA','AAA010101AAA','1.0','00000000-0000-0000-0000-000000000000');
+  // Intentar el proxy serverless de Vercel (/api/sat)
   try{
-    await consultarSATdirecto(testSOAP);
-    setSatUI('direct');
-    return;
+    const testSOAP=await buildSOAP('AAA010101AAA','AAA010101AAA','1.0','00000000-0000-0000-0000-000000000000');
+    const r=await fetch('/api/sat',{
+      method:'POST',
+      headers:{'Content-Type':'text/xml; charset=utf-8'},
+      body:testSOAP,
+      signal:AbortSignal.timeout(8000)
+    });
+    // Si responde (aunque el UUID sea inválido, el SAT responde XML)
+    if(r.status===200||r.status===500){
+      setSatUI('proxy','✓ Conectado al SAT via servidor Vercel — validación en tiempo real');
+      return;
+    }
   }catch(e){}
-  // Intento 2: proxy local
-  try{
-    await fetch('http://localhost:5050/ping',{signal:AbortSignal.timeout(2000)});
-    setSatUI('proxy');
-    return;
-  }catch(e){}
-  // Sin conexión
-  setSatUI('none','Sin conexión SAT — activa el proxy para validación en línea');
+  // Sin conexión (desarrollo local sin proxy)
+  setSatUI('none','Sin conexión SAT — sube el proyecto a Vercel para validación en línea');
 }
 
 /* Consultar una factura con el mejor modo disponible */
 async function consultarSAT(f){
   if(!f.Emisor_RFC||!f.Receptor_RFC||!f.Total||!f.UUID){f.Error_SAT='Datos incompletos en XML';return;}
+  if(satMode==='none'){f.Error_SAT='Sin conexión SAT';return;}
   const soap=await buildSOAP(f.Emisor_RFC,f.Receptor_RFC,f.Total,f.UUID);
   try{
-    let result;
-    if(satMode==='direct') result=await consultarSATdirecto(soap);
-    else if(satMode==='proxy') result=await consultarSATproxy(soap);
-    else{f.Error_SAT='Sin conexión SAT';return;}
+    const result=await consultarSATproxy(soap);
     f.Estatus_SAT=result.Estado;
     f.EsCancelable_SAT=result.EsCancelable;
     f.ValidacionEFOS_SAT=result.ValidacionEFOS;
     f.EstatusCancelacion=result.EstatusCancelacion;
   }catch(e){
-    // Si modo directo falla en runtime, intentar proxy
-    if(satMode==='direct'){
-      try{
-        const r2=await consultarSATproxy(soap);
-        f.Estatus_SAT=r2.Estado;f.EsCancelable_SAT=r2.EsCancelable;
-        f.ValidacionEFOS_SAT=r2.ValidacionEFOS;f.EstatusCancelacion=r2.EstatusCancelacion;
-        satMode='proxy'; setSatUI('proxy');
-        return;
-      }catch(e2){}
-    }
     f.Error_SAT='Error SAT: '+(e.message||'timeout');
   }
 }
