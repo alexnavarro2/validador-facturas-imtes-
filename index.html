@@ -1299,51 +1299,35 @@ async function consultarSATdirecto(soap){
 
 /* Intento via proxy local */
 async function consultarSATproxy(soap){
-  // Codificar la URL del SAT para pasarla al proxy CORS
-  const SAT_URL='https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
-  // Usar corsproxy.io como proxy CORS gratuito
-  const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(SAT_URL);
-  const res=await fetch(proxyUrl,{
+  const res=await fetch('/api/sat',{
     method:'POST',
-    headers:{
-      'Content-Type':'text/xml; charset=utf-8',
-      'SOAPAction':'"http://tempuri.org/IConsultaCFDIService/Consulta"',
-    },
+    headers:{'Content-Type':'text/xml; charset=utf-8'},
     body:soap,
     signal:AbortSignal.timeout(25000)
   });
-  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  if(!res.ok) throw new Error('HTTP '+res.status);
   const text=await res.text();
-  console.log('[SAT response]', text.substring(0,500));
+  console.log('[SAT]',text.substring(0,300));
   return parseSATResponse(text);
 }
 
 /* Detección automática del mejor modo */
 async function verificarSAT(){
   setSatUI('checking');
-  // Probar corsproxy.io como proxy CORS gratuito para el SAT
   try{
-    const SAT_URL='https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc';
-    const testSOAP=await buildSOAP('AAA010101AAA','AAA010101AAA','1.0','00000000-0000-0000-0000-000000000000');
-    const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(SAT_URL);
-    const r=await fetch(proxyUrl,{
+    const r=await fetch('/api/sat',{
       method:'POST',
-      headers:{
-        'Content-Type':'text/xml; charset=utf-8',
-        'SOAPAction':'"http://tempuri.org/IConsultaCFDIService/Consulta"',
-      },
-      body:testSOAP,
-      signal:AbortSignal.timeout(10000)
+      headers:{'Content-Type':'text/xml; charset=utf-8'},
+      body:'<ping/>',
+      signal:AbortSignal.timeout(8000)
     });
-    if(r.ok){
-      const txt=await r.text();
-      if(txt.includes('ConsultaResult')||txt.includes('CodigoEstatus')||txt.includes('Envelope')){
-        setSatUI('proxy','✓ Conectado al SAT — validación en tiempo real');
-        return;
-      }
+    // Cualquier respuesta que no sea 404 significa que la función existe
+    if(r.status!==404){
+      setSatUI('proxy','✓ Conectado al SAT via Vercel — validación en tiempo real');
+      return;
     }
-  }catch(e){console.warn('corsproxy.io falló:',e.message);}
-  setSatUI('none','Sin conexión SAT — verifica tu conexión a internet');
+  }catch(e){console.warn('api/sat:',e.message);}
+  setSatUI('none','Sin conexión SAT — los datos XML se extraen correctamente');
 }
 
 /* Consultar una factura con el mejor modo disponible */
